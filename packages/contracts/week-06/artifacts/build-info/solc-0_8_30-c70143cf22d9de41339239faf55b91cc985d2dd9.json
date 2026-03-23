@@ -1,0 +1,43 @@
+{
+  "_format": "hh3-sol-build-info-1",
+  "id": "solc-0_8_30-c70143cf22d9de41339239faf55b91cc985d2dd9",
+  "solcVersion": "0.8.30",
+  "solcLongVersion": "0.8.30+commit.73712a01",
+  "userSourceNameMap": {
+    "contracts/ExampleExternalContract.sol": "project/contracts/ExampleExternalContract.sol",
+    "contracts/Staker.sol": "project/contracts/Staker.sol",
+    "contracts/Week6Module.sol": "project/contracts/Week6Module.sol"
+  },
+  "input": {
+    "language": "Solidity",
+    "settings": {
+      "evmVersion": "prague",
+      "outputSelection": {
+        "*": {
+          "": [
+            "ast"
+          ],
+          "*": [
+            "abi",
+            "evm.bytecode",
+            "evm.deployedBytecode",
+            "evm.methodIdentifiers",
+            "metadata"
+          ]
+        }
+      },
+      "remappings": []
+    },
+    "sources": {
+      "project/contracts/ExampleExternalContract.sol": {
+        "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.30;\n\ncontract ExampleExternalContract {\n    bool public completed;\n    uint256 public completedAt;\n    uint256 public totalReceived;\n    uint256 public completionCount;\n\n    event FundsLocked(address indexed caller, uint256 amount, uint256 timestamp);\n\n    function complete() external payable {\n        require(msg.value > 0, \"No value sent\");\n        completed = true;\n        completedAt = block.timestamp;\n        totalReceived += msg.value;\n        completionCount += 1;\n        emit FundsLocked(msg.sender, msg.value, block.timestamp);\n    }\n}\n"
+      },
+      "project/contracts/Staker.sol": {
+        "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.30;\n\nimport \"./ExampleExternalContract.sol\";\n\nerror AlreadyStaked();\nerror StakeWindowClosed();\nerror ZeroValue();\nerror NotStaker();\nerror WithdrawWindowClosed();\nerror WithdrawWindowNotOpen();\nerror AlreadyWithdrawn();\nerror LockWindowNotOpen();\nerror NoFundsToLock();\nerror NoActiveCycle();\nerror Reentrancy();\n\ncontract Staker {\n    ExampleExternalContract public immutable exampleExternalContract;\n    uint256 public constant STAKE_WINDOW_DURATION = 2 minutes;\n    uint256 public constant WITHDRAW_WINDOW_DURATION = 2 minutes;\n\n    address public staker;\n    uint256 public stakedAt;\n    uint256 public stakeDeadline;\n    uint256 public withdrawDeadline;\n    uint256 public stakedAmount;\n    bool public withdrawn;\n    uint256 public completedRounds;\n    bool private _entered;\n\n    uint256 public constant REWARD_PER_BLOCK = 0.001 ether;\n    uint256 public constant SECONDS_PER_BLOCK = 12;\n\n    event Staked(address indexed staker, uint256 amount);\n    event Withdrawn(address indexed staker, uint256 payout, uint256 reward);\n    event RewardsFunded(address indexed funder, uint256 amount);\n    event CycleReset(uint256 completedRounds);\n\n    modifier nonReentrant() {\n        if (_entered) revert Reentrancy();\n        _entered = true;\n        _;\n        _entered = false;\n    }\n\n    modifier onlyStaker() {\n        if (msg.sender != staker) revert NotStaker();\n        _;\n    }\n\n    modifier stakeOpen() {\n        if (stakeDeadline != 0 && block.timestamp >= stakeDeadline) revert StakeWindowClosed();\n        _;\n    }\n\n    modifier withdrawOpen() {\n        if (stakedAmount == 0) revert NoActiveCycle();\n        if (block.timestamp < stakeDeadline) revert WithdrawWindowNotOpen();\n        if (block.timestamp >= withdrawDeadline) revert WithdrawWindowClosed();\n        _;\n    }\n\n    modifier withdrawClosed() {\n        if (stakedAmount == 0) revert NoActiveCycle();\n        if (block.timestamp < withdrawDeadline) revert LockWindowNotOpen();\n        _;\n    }\n\n    constructor(address exampleExternalContractAddress) payable {\n        exampleExternalContract = ExampleExternalContract(exampleExternalContractAddress);\n        if (msg.value > 0) {\n            emit RewardsFunded(msg.sender, msg.value);\n        }\n    }\n\n    function stake() external payable stakeOpen nonReentrant {\n        if (msg.value == 0) revert ZeroValue();\n        if (stakedAmount > 0) revert AlreadyStaked();\n\n        staker = msg.sender;\n        stakedAt = block.timestamp;\n        stakeDeadline = block.timestamp + STAKE_WINDOW_DURATION;\n        withdrawDeadline = stakeDeadline + WITHDRAW_WINDOW_DURATION;\n        stakedAmount = msg.value;\n        emit Staked(msg.sender, msg.value);\n    }\n\n    function fundRewards() external payable nonReentrant {\n        if (msg.value == 0) revert ZeroValue();\n        emit RewardsFunded(msg.sender, msg.value);\n    }\n\n    function calculateReward() public view returns (uint256) {\n        if (stakedAmount == 0 || block.timestamp <= stakedAt) {\n            return 0;\n        }\n\n        uint256 lastRewardTimestamp = block.timestamp < stakeDeadline ? block.timestamp : stakeDeadline;\n        if (lastRewardTimestamp <= stakedAt) {\n            return 0;\n        }\n\n        uint256 eligibleSeconds = lastRewardTimestamp - stakedAt;\n        return (eligibleSeconds * REWARD_PER_BLOCK) / SECONDS_PER_BLOCK;\n    }\n\n    function withdraw() external onlyStaker withdrawOpen nonReentrant {\n        if (withdrawn) revert AlreadyWithdrawn();\n        address currentStaker = staker;\n        uint256 reward = calculateReward();\n        uint256 payout = stakedAmount + reward;\n\n        withdrawn = true;\n        _resetCycle();\n        // send after state changes to avoid reentrancy\n        (bool success, ) = payable(currentStaker).call{value: payout}(\"\");\n        require(success, \"Transfer failed\");\n\n        emit Withdrawn(currentStaker, payout, reward);\n    }\n\n    function withdrawableAmount() external view returns (uint256) {\n        if (block.timestamp < stakeDeadline || block.timestamp >= withdrawDeadline || stakedAmount == 0 || withdrawn) {\n            return 0;\n        }\n\n        return stakedAmount + calculateReward();\n    }\n\n    function lockFundsInExternalContract() external withdrawClosed nonReentrant {\n        uint256 contractBalance = address(this).balance;\n        if (contractBalance == 0) revert NoFundsToLock();\n        exampleExternalContract.complete{value: contractBalance}();\n        _resetCycle();\n    }\n\n    function _resetCycle() internal {\n        staker = address(0);\n        stakedAt = 0;\n        stakeDeadline = 0;\n        withdrawDeadline = 0;\n        stakedAmount = 0;\n        withdrawn = false;\n        completedRounds += 1;\n        emit CycleReset(completedRounds);\n    }\n\n    receive() external payable {}\n}\n"
+      },
+      "project/contracts/Week6Module.sol": {
+        "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.28;\n\ncontract Week6Module {\n    bytes32 public constant ASSIGNMENT_ID = keccak256(\"road-to-web3-week-6-staking\");\n    string public constant WEEK = \"Week 6\";\n    string public constant TITLE = \"Build a Staking Application\";\n    uint256 public constant STAKE_WINDOW_SECONDS = 2 minutes;\n    uint256 public constant WITHDRAW_WINDOW_SECONDS = 4 minutes;\n\n    function assignment() external pure returns (bytes32 id, string memory week, string memory title, string memory summary) {\n        return (\n            ASSIGNMENT_ID,\n            WEEK,\n            TITLE,\n            \"Stake ETH, withdraw rewards before the window closes, and lock remaining funds into the external contract after the cooldown.\"\n        );\n    }\n}\n"
+      }
+    }
+  }
+}

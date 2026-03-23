@@ -8,8 +8,7 @@ const weeks = Array.from({ length: 6 }, (_, index) => {
   const week = index + 1
   return {
     number: week,
-    label: `LV.${week}`,
-    title: `W${week}`,
+    label: `W${week}`,
     href: `/weeks/${week}`,
   }
 })
@@ -36,7 +35,6 @@ export function Navigation() {
                   )}
                 >
                   <span className="text-[10px] font-bold tracking-wider">{week.label}</span>
-                  <span className="text-[9px] tracking-widest opacity-70">{week.title}</span>
                 </Link>
               )
             })}

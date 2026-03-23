@@ -29,15 +29,21 @@ export const STAKER_ABI = [
   "function stakedAt() external view returns (uint256)",
   "function stakeDeadline() external view returns (uint256)",
   "function withdrawDeadline() external view returns (uint256)",
+  "function STAKE_WINDOW_DURATION() external view returns (uint256)",
+  "function WITHDRAW_WINDOW_DURATION() external view returns (uint256)",
   "function stakedAmount() external view returns (uint256)",
   "function withdrawn() external view returns (bool)",
+  "function completedRounds() external view returns (uint256)",
   "function REWARD_PER_BLOCK() external view returns (uint256)",
   "function SECONDS_PER_BLOCK() external view returns (uint256)",
   "function calculateReward() external view returns (uint256)",
   "function withdrawableAmount() external view returns (uint256)",
   "function stake() external payable",
+  "function fundRewards() external payable",
   "function withdraw() external",
   "function lockFundsInExternalContract() external",
+  "event CycleReset(uint256 completedRounds)",
+  "event RewardsFunded(address indexed funder, uint256 amount)",
   "event Staked(address indexed staker, uint256 amount)",
   "event Withdrawn(address indexed staker, uint256 payout, uint256 reward)",
 ] as const
@@ -46,12 +52,17 @@ export const EXAMPLE_EXTERNAL_CONTRACT_ABI = [
   "function completed() external view returns (bool)",
   "function completedAt() external view returns (uint256)",
   "function totalReceived() external view returns (uint256)",
+  "function completionCount() external view returns (uint256)",
   "function complete() external payable",
   "event FundsLocked(address indexed caller, uint256 amount, uint256 timestamp)",
 ] as const
 
 export const RARITY_LABELS = ["Common", "Uncommon", "Rare", "Epic", "Mythic"] as const
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const
+const NEXT_PUBLIC_WEEK6_STAKER_ADDRESS =
+  process.env.NEXT_PUBLIC_WEEK6_STAKER_ADDRESS?.trim() || ""
+const NEXT_PUBLIC_WEEK6_EXAMPLE_EXTERNAL_CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_WEEK6_EXAMPLE_EXTERNAL_CONTRACT_ADDRESS?.trim() || ""
 
 /**
  * Week 1 Configuration - LabMint Trophy
@@ -98,7 +109,8 @@ export const WEEK5_BULLBEAR_CONFIG = {
  */
 export const WEEK6_CONFIG = {
   ...SEPOLIA,
-  contractAddress: ZERO_ADDRESS,
-  exampleExternalContractAddress: ZERO_ADDRESS,
+  contractAddress: NEXT_PUBLIC_WEEK6_STAKER_ADDRESS || ZERO_ADDRESS,
+  exampleExternalContractAddress:
+    NEXT_PUBLIC_WEEK6_EXAMPLE_EXTERNAL_CONTRACT_ADDRESS || ZERO_ADDRESS,
   defaultStakeEth: "0.01",
 } as const

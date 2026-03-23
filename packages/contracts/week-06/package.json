@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "XDG_CACHE_HOME=/tmp hardhat compile",
+    "dev": "XDG_CACHE_HOME=/tmp hardhat clean && XDG_CACHE_HOME=/tmp hardhat compile",
     "build": "echo \"use pnpm week:contracts --week=6\"",
-    "test": "XDG_CACHE_HOME=/tmp hardhat test",
+    "test": "XDG_CACHE_HOME=/tmp hardhat clean && XDG_CACHE_HOME=/tmp hardhat test",
     "lint": "echo 'no contracts-week-06 lint step yet'"
   },
   "devDependencies": {

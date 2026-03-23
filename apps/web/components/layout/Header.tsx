@@ -3,8 +3,14 @@
 import Link from "next/link"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { getHomepageRoadmapItems } from "@road/config"
 
 export function Header() {
+  const weeks = getHomepageRoadmapItems()
+  const levelsCount = weeks.length
+  const contractsCount = weeks.filter(week => week.status === "ready").length
+  const networksCount = new Set(weeks.flatMap(week => week.networks)).size
+
   return (
     <header className="relative w-full py-20 px-4 overflow-hidden">
       <div className="absolute inset-0 pointer-events-none opacity-30 scanlines" />
@@ -33,9 +39,9 @@ export function Header() {
         </p>
 
         <div className="flex flex-wrap justify-center gap-4 md:gap-6">
-          <ScoreCard value="4" label="LEVELS" color="cyan" />
-          <ScoreCard value="3" label="CONTRACTS" color="magenta" />
-          <ScoreCard value="2" label="NETWORKS" color="yellow" />
+          <ScoreCard value={String(levelsCount)} label="WEEKS" color="cyan" />
+          <ScoreCard value={String(contractsCount)} label="CONTRACTS" color="magenta" />
+          <ScoreCard value={String(networksCount)} label="NETWORKS" color="yellow" />
         </div>
       </div>
     </header>

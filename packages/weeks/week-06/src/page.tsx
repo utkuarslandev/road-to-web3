@@ -43,6 +43,7 @@ type Week6Snapshot = {
   withdrawDeadline: bigint
   stakedAmount: bigint
   withdrawn: boolean
+  completedRounds: bigint
   rewardPerBlock: bigint
   secondsPerBlock: bigint
   reward: bigint
@@ -52,6 +53,7 @@ type Week6Snapshot = {
   exampleContractReady: boolean
   exampleCompleted: boolean
   exampleCompletedAt: bigint
+  exampleCompletionCount: bigint
   exampleTotalReceived: bigint
 }
 
@@ -80,6 +82,10 @@ function formatCountdown(seconds: number): string {
 function formatEth(value: bigint): string {
   const formatted = ethers.formatEther(value)
   return formatted.includes(".") ? formatted.replace(/\.?0+$/, "") : formatted
+}
+
+function formatBigint(value: bigint | null | undefined): string {
+  return typeof value === "bigint" ? value.toString() : "—"
 }
 
 function isZeroAddress(address: string) {
@@ -152,6 +158,7 @@ export default function Week06Page() {
           withdrawDeadline,
           stakedAmount,
           withdrawn,
+          completedRounds,
           rewardPerBlock,
           secondsPerBlock,
           reward,
@@ -164,6 +171,7 @@ export default function Week06Page() {
           stakerContract.withdrawDeadline() as Promise<bigint>,
           stakerContract.stakedAmount() as Promise<bigint>,
           stakerContract.withdrawn() as Promise<boolean>,
+          stakerContract.completedRounds() as Promise<bigint>,
           stakerContract.REWARD_PER_BLOCK() as Promise<bigint>,
           stakerContract.SECONDS_PER_BLOCK() as Promise<bigint>,
           stakerContract.calculateReward() as Promise<bigint>,
@@ -172,6 +180,7 @@ export default function Week06Page() {
 
         let exampleCompleted = false
         let exampleCompletedAt = 0n
+        let exampleCompletionCount = 0n
         let exampleTotalReceived = 0n
         let exampleContractReady = false
         const resolvedExampleAddress = !isZeroAddress(exampleExternalContract)
@@ -185,6 +194,7 @@ export default function Week06Page() {
             const exampleContract = getContract(resolvedExampleAddress, EXAMPLE_EXTERNAL_CONTRACT_ABI, provider)
             exampleCompleted = await exampleContract.completed()
             exampleCompletedAt = await exampleContract.completedAt()
+            exampleCompletionCount = await exampleContract.completionCount()
             exampleTotalReceived = await exampleContract.totalReceived()
           }
         }
@@ -197,6 +207,7 @@ export default function Week06Page() {
             withdrawDeadline,
             stakedAmount,
             withdrawn,
+            completedRounds,
             rewardPerBlock,
             secondsPerBlock,
             reward,
@@ -206,6 +217,7 @@ export default function Week06Page() {
             exampleContractReady,
             exampleCompleted,
             exampleCompletedAt,
+            exampleCompletionCount,
             exampleTotalReceived,
           })
         }
@@ -223,23 +235,68 @@ export default function Week06Page() {
     }
   }, [provider, refreshKey])
 
+  const deployed = !isZeroAddress(WEEK6_CONFIG.contractAddress) && Boolean(snapshot)
+  const activeCycle = snapshot ? snapshot.stakedAmount > 0n : false
   const stakeDeadline = snapshot ? Number(snapshot.stakeDeadline) : 0
   const withdrawDeadline = snapshot ? Number(snapshot.withdrawDeadline) : 0
-  const stakeWindowOpen = snapshot ? now < stakeDeadline : false
-  const withdrawWindowOpen = snapshot ? now >= stakeDeadline && now < withdrawDeadline : false
-  const lockWindowOpen = snapshot ? now >= withdrawDeadline : false
-  const hasStake = snapshot ? snapshot.stakedAmount > 0n : false
+  const stakeWindowOpen = snapshot ? !activeCycle : false
+  const withdrawWindowOpen = snapshot ? activeCycle && now >= stakeDeadline && now < withdrawDeadline : false
+  const lockWindowOpen = snapshot ? activeCycle && now >= withdrawDeadline : false
+  const hasStake = activeCycle
   const withdrawFunded = snapshot ? snapshot.contractBalance >= snapshot.withdrawableAmount : false
-  const canStake = Boolean(snapshot) && stakeWindowOpen && !hasStake && !snapshot?.withdrawn
-  const canWithdraw = Boolean(snapshot) && withdrawWindowOpen && hasStake && !snapshot?.withdrawn && withdrawFunded
+  const rewardPoolBalance = snapshot
+    ? snapshot.contractBalance > snapshot.stakedAmount
+      ? snapshot.contractBalance - snapshot.stakedAmount
+      : 0n
+    : 0n
+  const isCurrentStaker =
+    Boolean(snapshot) &&
+    Boolean(wallet.address) &&
+    snapshot!.staker.toLowerCase() === wallet.address!.toLowerCase()
+  const canStake = Boolean(snapshot) && !activeCycle
+  const canWithdraw = Boolean(snapshot) && withdrawWindowOpen && hasStake && withdrawFunded && isCurrentStaker
   const canLock =
     snapshot !== null &&
     lockWindowOpen &&
     snapshot.contractBalance > 0n &&
-    snapshot.exampleContractReady &&
-    !snapshot.exampleCompleted
-  const deployed = !isZeroAddress(WEEK6_CONFIG.contractAddress) && Boolean(snapshot)
+    snapshot.exampleContractReady
   const isLoading = !snapshot && !deploymentWarning && !error
+  const cycleStatus = isLoading
+    ? "Loading"
+    : !snapshot
+    ? "Unavailable"
+    : !activeCycle
+    ? "Open for next staker"
+    : withdrawWindowOpen
+    ? "Withdraw open"
+    : lockWindowOpen
+    ? "Lock ready"
+    : "Stake in progress"
+  const connectedRole = !wallet.isConnected
+    ? "Wallet not connected"
+    : isCurrentStaker
+    ? "Current staker"
+    : activeCycle
+    ? "Visitor waiting for next round"
+    : "Next staker eligible"
+  const contractHealth = !snapshot
+    ? "Loading on-chain state"
+    : !snapshot.exampleContractReady
+    ? "External contract not ready"
+    : activeCycle
+    ? withdrawFunded
+      ? "Active round is funded for withdrawal"
+      : "Active round is underfunded"
+    : "Contract is idle and ready for a new staker"
+  const nextTransitionLabel = !snapshot
+    ? "Waiting for on-chain read"
+    : !activeCycle
+    ? "Next stake can start now"
+    : withdrawWindowOpen
+    ? `Withdraw window closes in ${withdrawCountdown}`
+    : lockWindowOpen
+    ? "Lock window is open now"
+    : `Withdraw window opens in ${stakeCountdown}`
 
   async function runWalletAction(
     action: "stake" | "withdraw" | "lock",
@@ -283,7 +340,9 @@ export default function Week06Page() {
     if (!canStake) {
       toast({
         title: "Stake unavailable",
-        description: "The staking window is closed or this cycle is already locked.",
+        description: activeCycle
+          ? "Another wallet is currently using this round. Wait for that wallet to withdraw or for the round to be locked."
+          : "This staking round is not available right now.",
         variant: "destructive",
       })
       return
@@ -374,6 +433,7 @@ export default function Week06Page() {
 
   const stakeCountdown = snapshot ? formatCountdown(stakeDeadline - now) : "n/a"
   const withdrawCountdown = snapshot ? formatCountdown(withdrawDeadline - now) : "n/a"
+  const lockCountdown = snapshot ? formatCountdown(withdrawDeadline - now) : "n/a"
 
   return (
     <div>
@@ -392,8 +452,62 @@ export default function Week06Page() {
         </div>
         <h1 className="text-4xl font-bold mb-3">Staking Application</h1>
         <p className="text-muted-foreground max-w-3xl">
-          Stake ETH during the open window, withdraw the payout before the lock period starts, then forward any leftover contract balance into the external completion contract.
+          Public sequential staking on Sepolia: one wallet runs an active round, withdraws during the payout window, then the next visitor can start the next round from the website.
         </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 mb-8">
+        <Card className="glass p-6">
+          <CardTitle className="text-base mb-3">Contract Status</CardTitle>
+          <div className="flex flex-col gap-2 text-sm">
+            <Badge variant={deployed ? "success" : "destructive"} className="w-fit">
+              {deployed ? cycleStatus : "Unavailable"}
+            </Badge>
+            <p className="text-muted-foreground">{contractHealth}</p>
+          </div>
+        </Card>
+
+        <Card className="glass p-6">
+          <CardTitle className="text-base mb-3">Connected Wallet</CardTitle>
+          <div className="flex flex-col gap-2 text-sm">
+            <Badge variant={isCurrentStaker ? "default" : wallet.isConnected ? "secondary" : "outline"} className="w-fit">
+              {connectedRole}
+            </Badge>
+            <p className="text-muted-foreground">
+              {wallet.address ? truncateAddress(wallet.address) : "Connect a Sepolia wallet to transact."}
+            </p>
+          </div>
+        </Card>
+
+        <Card className="glass p-6">
+          <CardTitle className="text-base mb-3">Reward Pool</CardTitle>
+          <div className="flex flex-col gap-2 text-sm">
+            <p className="font-mono text-2xl">{snapshot ? `${formatEth(rewardPoolBalance)} ETH` : "—"}</p>
+            <p className="text-muted-foreground">
+              {snapshot
+                ? activeCycle
+                  ? withdrawFunded
+                    ? "Covers the current staker payout."
+                    : "Does not fully cover the current payout."
+                  : "Idle balance available for the next round."
+                : "Loading reward pool balance."}
+            </p>
+          </div>
+        </Card>
+
+        <Card className="glass p-6">
+          <CardTitle className="text-base mb-3">Next Transition</CardTitle>
+          <div className="flex flex-col gap-2 text-sm">
+            <p className="font-medium">{nextTransitionLabel}</p>
+            <p className="text-muted-foreground">
+              {snapshot
+                ? activeCycle
+                  ? `Stake closes at ${formatTimestamp(snapshot.stakeDeadline)} and withdraw closes at ${formatTimestamp(snapshot.withdrawDeadline)}.`
+                  : "A visitor can start the next round immediately."
+                : "Waiting for contract timers."}
+            </p>
+          </div>
+        </Card>
       </div>
 
       {(deploymentWarning || error) && (
@@ -416,7 +530,7 @@ export default function Week06Page() {
               Stake ETH
             </CardTitle>
             <CardDescription>
-              This contract is single-cycle. Once it has been used, the stake cannot be repeated without redeploying.
+              Any visitor can start the next round when no stake is active. After a withdraw or lock, the contract resets and the next wallet can participate.
             </CardDescription>
           </CardHeader>
           <CardContent className="p-6">
@@ -503,11 +617,12 @@ export default function Week06Page() {
                 </Button>
               </div>
 
-              <div className="rounded-lg border border-border/60 bg-background/40 p-4 text-sm text-muted-foreground space-y-1">
+              <div className="rounded-lg border border-border/60 bg-background/40 p-4 text-sm text-muted-foreground">
                 <p>Wallet: {wallet.isConnected ? "Connected" : "Not connected"}</p>
-                <p>Stake window: {stakeWindowOpen ? `open for ${stakeCountdown}` : "closed"}</p>
-                <p>Withdraw window: {withdrawWindowOpen ? `open for ${withdrawCountdown}` : lockWindowOpen ? "closed" : `opens in ${withdrawCountdown}`}</p>
-                <p>Withdrawal funding: {snapshot ? (withdrawFunded ? "ready" : "insufficient contract balance") : "loading"}</p>
+                <p>Round status: {cycleStatus}</p>
+                <p>Next stake: {stakeWindowOpen ? "open to any wallet" : "waiting for active round to finish"}</p>
+                <p>Withdraw window: {withdrawWindowOpen ? `open for ${withdrawCountdown}` : activeCycle ? (lockWindowOpen ? "closed" : `opens in ${stakeCountdown}`) : "n/a"}</p>
+                <p>Withdrawal funding: {snapshot ? (activeCycle ? (withdrawFunded ? "ready" : "insufficient contract balance") : "reward pool idle") : "loading"}</p>
               </div>
             </form>
           </CardContent>
@@ -525,13 +640,13 @@ export default function Week06Page() {
             <div className="space-y-4 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Cycle</span>
-                <Badge variant={isLoading ? "secondary" : stakeWindowOpen ? "success" : withdrawWindowOpen ? "secondary" : "destructive"}>
-                  {isLoading ? "Loading" : stakeWindowOpen ? "Stake open" : withdrawWindowOpen ? "Withdraw open" : "Locked"}
+                <Badge variant={isLoading ? "secondary" : !activeCycle ? "success" : withdrawWindowOpen ? "secondary" : lockWindowOpen ? "destructive" : "default"}>
+                  {cycleStatus}
                 </Badge>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Staker</span>
-                <span className="font-mono">{snapshot ? truncateAddress(snapshot.staker) : "—"}</span>
+                <span className="font-mono">{snapshot && !isZeroAddress(snapshot.staker) ? truncateAddress(snapshot.staker) : "Open round"}</span>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Staked amount</span>
@@ -546,8 +661,67 @@ export default function Week06Page() {
                 <span className="font-mono">{snapshot ? `${formatEth(snapshot.contractBalance)} ETH` : "—"}</span>
               </div>
               <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Reward pool only</span>
+                <span className="font-mono">{snapshot ? `${formatEth(rewardPoolBalance)} ETH` : "—"}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Reward per block</span>
                 <span className="font-mono">{snapshot ? `${formatEth(snapshot.rewardPerBlock)} ETH` : "—"}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Completed rounds</span>
+                <span className="font-mono">{formatBigint(snapshot?.completedRounds)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Payout funding</span>
+                <Badge variant={!snapshot ? "secondary" : withdrawFunded || !activeCycle ? "success" : "destructive"}>
+                  {!snapshot ? "Loading" : !activeCycle ? "Idle" : withdrawFunded ? "Funded" : "Underfunded"}
+                </Badge>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="glass p-6">
+            <CardTitle className="text-xl mb-4">Live Timers</CardTitle>
+            <div className="flex flex-col gap-4 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Stake window</span>
+                <span className="font-mono">
+                  {!snapshot ? "—" : !activeCycle ? "Open now" : `Closes in ${stakeCountdown}`}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Withdraw window</span>
+                <span className="font-mono">
+                  {!snapshot
+                    ? "—"
+                    : !activeCycle
+                    ? "Starts after next stake"
+                    : withdrawWindowOpen
+                    ? `Open for ${withdrawCountdown}`
+                    : lockWindowOpen
+                    ? "Closed"
+                    : `Opens in ${stakeCountdown}`}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Lock window</span>
+                <span className="font-mono">
+                  {!snapshot
+                    ? "—"
+                    : !activeCycle
+                    ? "Starts after next stake"
+                    : lockWindowOpen
+                    ? "Open now"
+                    : `Opens in ${lockCountdown}`}
+                </span>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-background/40 p-4 text-muted-foreground">
+                {!snapshot
+                  ? "Waiting for contract timers."
+                  : !activeCycle
+                  ? "No active round. The next visitor can stake immediately and start both timers."
+                  : `Stake deadline: ${formatTimestamp(snapshot.stakeDeadline)}. Withdraw deadline: ${formatTimestamp(snapshot.withdrawDeadline)}.`}
               </div>
             </div>
           </Card>
@@ -592,11 +766,11 @@ export default function Week06Page() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <p className="text-muted-foreground mb-1">Stake deadline</p>
-                  <p className="font-mono text-xs">{snapshot ? formatTimestamp(snapshot.stakeDeadline) : "—"}</p>
+                  <p className="font-mono text-xs">{snapshot && activeCycle ? formatTimestamp(snapshot.stakeDeadline) : "Starts on next stake"}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground mb-1">Withdraw deadline</p>
-                  <p className="font-mono text-xs">{snapshot ? formatTimestamp(snapshot.withdrawDeadline) : "—"}</p>
+                  <p className="font-mono text-xs">{snapshot && activeCycle ? formatTimestamp(snapshot.withdrawDeadline) : "Starts on next stake"}</p>
                 </div>
               </div>
               <div>
@@ -605,7 +779,24 @@ export default function Week06Page() {
                   {canLock ? <ShieldCheck className="h-4 w-4 text-neon-green" /> : <AlertCircle className="h-4 w-4 text-muted-foreground" />}
                   {canLock
                     ? "Funds can be locked into the external contract."
-                    : "Locking requires a funded contract, a closed withdraw window, and a ready external contract."}
+                    : "Locking requires an active round with a closed withdraw window, a funded contract, and a ready external contract."}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground mb-1">Reward pool status</p>
+                <p className="flex items-center gap-2">
+                  {snapshot && (withdrawFunded || !activeCycle) ? (
+                    <ShieldCheck className="h-4 w-4 text-neon-green" />
+                  ) : (
+                    <AlertCircle className="h-4 w-4 text-muted-foreground" />
+                  )}
+                  {snapshot
+                    ? activeCycle
+                      ? withdrawFunded
+                        ? `Reward pool covers the ${formatEth(snapshot.withdrawableAmount)} ETH withdrawal.`
+                        : `Reward pool is short for the ${formatEth(snapshot.withdrawableAmount)} ETH withdrawal.`
+                      : `Idle reward pool balance: ${formatEth(rewardPoolBalance)} ETH.`
+                    : "Loading reward pool status."}
                 </p>
               </div>
             </div>
@@ -619,15 +810,15 @@ export default function Week06Page() {
           <ul className="space-y-3 text-sm text-muted-foreground">
             <li className="flex gap-3">
               <ShieldCheck className="h-4 w-4 mt-0.5 text-neon-green shrink-0" />
-              Connect a wallet on Sepolia, then stake ETH during the open window.
+              Connect a wallet on Sepolia and start the next round when the contract is open for a new staker.
             </li>
             <li className="flex gap-3">
               <Clock3 className="h-4 w-4 mt-0.5 text-primary shrink-0" />
-              Withdraw is only allowed after the stake window closes and before the lock window starts.
+              The active staker can withdraw after the stake timer ends and before the lock timer starts.
             </li>
             <li className="flex gap-3">
               <Lock className="h-4 w-4 mt-0.5 text-week2 shrink-0" />
-              When the window closes, any remaining contract balance can be forwarded to the external completion contract.
+              If the withdraw window closes first, anyone can lock the remaining balance and the contract resets for the next visitor.
             </li>
           </ul>
         </Card>
@@ -641,20 +832,20 @@ export default function Week06Page() {
             </div>
             <div>
               <p className="text-muted-foreground mb-1">Withdrawn</p>
-              <p>{snapshot ? (snapshot.withdrawn ? "Yes" : "No") : "—"}</p>
+              <p>{snapshot ? (activeCycle ? (snapshot.withdrawn ? "Yes" : "No") : "Round reset") : "—"}</p>
             </div>
             <div>
               <p className="text-muted-foreground mb-1">Seconds per block</p>
-              <p className="font-mono">{snapshot ? snapshot.secondsPerBlock.toString() : "—"}</p>
+              <p className="font-mono">{formatBigint(snapshot?.secondsPerBlock)}</p>
             </div>
             <div>
               <p className="text-muted-foreground mb-1">Example contract</p>
-              <p>{snapshot ? (snapshot.exampleCompleted ? "Completed" : "Pending") : "—"}</p>
+              <p>{snapshot ? (snapshot.exampleCompletionCount > 0n ? "Receiving completed rounds" : "Waiting for first lock") : "—"}</p>
             </div>
           </div>
-          {snapshot && snapshot.exampleCompleted && (
+          {snapshot && snapshot.exampleCompletionCount > 0n && (
             <div className="mt-4 rounded-lg border border-border/60 bg-background/40 p-4 text-sm text-muted-foreground">
-              External contract completed at {formatTimestamp(snapshot.exampleCompletedAt)} and received {formatEth(snapshot.exampleTotalReceived)} ETH.
+              External contract has received {formatEth(snapshot.exampleTotalReceived)} ETH across {formatBigint(snapshot.exampleCompletionCount)} locked rounds. Last update: {formatTimestamp(snapshot.exampleCompletedAt)}.
             </div>
           )}
         </Card>
